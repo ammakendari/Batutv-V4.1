@@ -2,6 +2,7 @@ import { CMSUser, UserFormInput, UserRole, UserStatus, RolePermissionDetail } fr
 import { getStoredAuthors } from './authorAdminStore';
 import { logSystemActivity, getStoredSecurityConfig } from './systemSettingsStore';
 import { AdminUser } from '../types/admin';
+import { firestoreUserRepository } from '../repositories/firestore/firestoreUserRepository';
 
 export const USER_STORAGE_KEY = 'batutv_cms_users';
 export const USER_UPDATED_EVENT = 'batutv_users_updated';
@@ -370,8 +371,11 @@ export const INITIAL_CMS_USERS: CMSUser[] = [
   },
 ];
 
-// Helper: Read users from localStorage
-export const getStoredUsers = (): CMSUser[] => {
+// In-Memory state for instant UI rendering and synchronous helper lookups
+let inMemoryUsers: CMSUser[] = loadLocalCache();
+let isSubscribed = false;
+
+function loadLocalCache(): CMSUser[] {
   if (typeof window === 'undefined') return INITIAL_CMS_USERS;
   try {
     const raw = localStorage.getItem(USER_STORAGE_KEY);
@@ -379,24 +383,75 @@ export const getStoredUsers = (): CMSUser[] => {
       localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(INITIAL_CMS_USERS));
       return INITIAL_CMS_USERS;
     }
-    const parsed: CMSUser[] = JSON.parse(raw);
-    return parsed;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+    return INITIAL_CMS_USERS;
   } catch (err) {
     console.error('Error reading stored users:', err);
     return INITIAL_CMS_USERS;
   }
-};
+}
 
-// Helper: Save users to localStorage and broadcast event
-export const saveStoredUsers = (users: CMSUser[]): void => {
+function updateLocalCache(users: CMSUser[]): void {
+  if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(users));
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent(USER_UPDATED_EVENT, { detail: users }));
-    }
+    window.dispatchEvent(new CustomEvent(USER_UPDATED_EVENT, { detail: users }));
   } catch (err) {
     console.error('Error saving stored users:', err);
   }
+}
+
+function initRealtimeSync() {
+  if (typeof window === 'undefined' || isSubscribed) return;
+  isSubscribed = true;
+
+  firestoreUserRepository.subscribe(
+    (cloudUsers) => {
+      if (cloudUsers && cloudUsers.length > 0) {
+        inMemoryUsers = cloudUsers;
+        updateLocalCache(cloudUsers);
+      }
+    },
+    (err) => {
+      console.warn('[userAdminStore] Firestore subscription fallback to local cache:', err);
+    }
+  );
+}
+
+initRealtimeSync();
+
+// Helper: Read users (SSoT synced with Firestore & LocalStorage cache)
+export const getStoredUsers = (): CMSUser[] => {
+  if (inMemoryUsers && inMemoryUsers.length > 0) {
+    return inMemoryUsers;
+  }
+  return loadLocalCache();
+};
+
+/**
+ * Force refresh from Firestore
+ */
+export async function refreshUsersFromFirestore(): Promise<CMSUser[]> {
+  try {
+    const users = await firestoreUserRepository.getUsers();
+    if (users && users.length > 0) {
+      inMemoryUsers = users;
+      updateLocalCache(users);
+      return users;
+    }
+  } catch (err) {
+    console.warn('[userAdminStore] Failed to fetch users from Firestore:', err);
+  }
+  return getStoredUsers();
+}
+
+// Helper: Save users to cache and broadcast event
+export const saveStoredUsers = (users: CMSUser[]): void => {
+  inMemoryUsers = users;
+  updateLocalCache(users);
 };
 
 // Helper: Get user by ID
@@ -664,6 +719,11 @@ export const addUser = (
   const updatedUsers = [newUser, ...users];
   saveStoredUsers(updatedUsers);
 
+  // Async persist to Firestore
+  firestoreUserRepository.saveUser(newUser).catch((err) => {
+    console.warn('[userAdminStore] Firestore async saveUser error:', err);
+  });
+
   // Log activity
   logSystemActivity(
     currentUser || { name: 'Administrator', role: 'Administrator' },
@@ -812,6 +872,11 @@ export const updateUser = (
   users[index] = updatedRecord;
   saveStoredUsers(users);
 
+  // Async persist to Firestore
+  firestoreUserRepository.saveUser(updatedRecord).catch((err) => {
+    console.warn('[userAdminStore] Firestore async updateUser error:', err);
+  });
+
   // Log activity
   if (roleChanged) {
     logSystemActivity(
@@ -900,6 +965,11 @@ export const deleteUser = (
 
   const remaining = users.filter((u) => u.id !== id);
   saveStoredUsers(remaining);
+
+  // Async persist to Firestore
+  firestoreUserRepository.deleteUser(id).catch((err) => {
+    console.warn('[userAdminStore] Firestore async deleteUser error:', err);
+  });
 
   logSystemActivity(
     currentUser || { name: 'Administrator', role: 'Administrator' },

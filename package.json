@@ -10,6 +10,16 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "seed:firestore": "tsx src/scripts/seedFirestore.ts",
+    "backup:verify": "tsx src/scripts/verifyBackup.ts",
+    "audit:integrity": "tsx src/scripts/runIntegrityAudit.ts",
+    "audit:production": "tsx src/scripts/runProductionGovernanceAudit.ts",
+    "audit:security": "tsx src/scripts/auditSecurity.ts",
+    "audit:cost": "tsx src/scripts/auditCost.ts",
+    "audit:capacity": "tsx src/scripts/auditCapacity.ts",
+    "audit:slo": "tsx src/scripts/auditSLO.ts",
+    "audit:scheduled": "tsx src/scripts/runScheduledAudit.ts",
+    "audit:all": "tsx src/scripts/runScheduledAudit.ts",
+    "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

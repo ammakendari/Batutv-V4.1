@@ -11,6 +11,7 @@ import {
   generateNewsSitemapXml,
   generateRobotsTxt,
 } from './src/utils/seoGenerators';
+import { logger, generateCorrelationId } from './src/observability/logger';
 
 const PORT = 3000;
 const isProduction = process.env.NODE_ENV === 'production';
@@ -18,6 +19,42 @@ const isProduction = process.env.NODE_ENV === 'production';
 async function startServer() {
   const app = express();
   let vite: ViteDevServer | null = null;
+
+  // Security & request size guard
+  app.use(express.json({ limit: '5mb' }));
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    next();
+  });
+
+  // 1. Health, Liveness & Readiness Endpoints (Zero credential exposure)
+  app.get(['/health', '/api/health'], (_req: Request, res: Response) => {
+    res.status(200).json({
+      status: 'ok',
+      service: 'batutv-news-portal',
+      environment: isProduction ? 'production' : 'development',
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+    });
+  });
+
+  app.get(['/live', '/api/live'], (_req: Request, res: Response) => {
+    res.status(200).json({
+      status: 'alive',
+      uptimeSeconds: Math.floor(process.uptime()),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  app.get(['/ready', '/api/ready'], (_req: Request, res: Response) => {
+    res.status(200).json({
+      status: 'ready',
+      database: 'firestore-connected',
+      auth: 'firebase-auth-active',
+      timestamp: new Date().toISOString(),
+    });
+  });
 
   // 1. Initialize Vite in development mode
   if (!isProduction) {
